@@ -1,4 +1,3 @@
-import "./style.css";
 import { createGame } from "./parkTycoon.js";
 
 const root = document.querySelector("#app");
@@ -10,15 +9,15 @@ root.innerHTML = `
         <span class="eyebrow">SK INCHEON PETROCHEMICAL / WORKFORCE DIGITAL TWIN</span>
         <h1>SKIncheonWonchang-Isometric</h1>
         <p>
-          인천 서구 봉수대로 415 원창동 플랜트를 배경으로, 4조2교대 운영과 일근 조직, 승계 파이프라인,
-          벚꽃동산 개방 이벤트를 동시에 조율하는 인력계획 시뮬레이션입니다.
+          Manage a 4-crew petrochemical workforce across headquarters, the cracker, aromatics, utilities,
+          succession planning, labor harmony, and the spring blossom opening window.
         </p>
       </div>
       <div class="hero-actions">
-        <button data-action="toggle-run">가동 재개</button>
-        <button data-action="advance-12h">12시간 진행</button>
-        <button data-action="advance-day">1일 진행</button>
-        <button data-action="open-audio">오디오 활성화</button>
+        <button data-action="toggle-run">Start Sim</button>
+        <button data-action="advance-12h">Advance 12h</button>
+        <button data-action="advance-day">Advance 1 day</button>
+        <button data-action="open-audio">Audio</button>
       </div>
     </header>
 
@@ -63,11 +62,11 @@ root.innerHTML = `
           <div class="canvas-toolbar">
             <div class="canvas-title">
               <span class="eyebrow">Plant Overview</span>
-              <h2 data-scene-title>원창동 메인 콤플렉스</h2>
+              <h2 data-scene-title>Main Process Core</h2>
             </div>
             <div class="panel-actions">
-              <button data-action="focus-core">플랜트 중심</button>
-              <button data-action="focus-blossom">벚꽃동산</button>
+              <button data-action="focus-core">Focus Core</button>
+              <button data-action="focus-blossom">Focus Blossom</button>
             </div>
           </div>
           <canvas id="game-canvas" width="1440" height="840"></canvas>
@@ -81,7 +80,7 @@ root.innerHTML = `
             <div class="panel-head">
               <div>
                 <span class="eyebrow">Staffing Heatmap</span>
-                <h2>미니맵</h2>
+                <h2>Minimap</h2>
               </div>
             </div>
             <canvas id="minimap-canvas" width="360" height="240"></canvas>
@@ -91,7 +90,7 @@ root.innerHTML = `
             <div class="panel-head">
               <div>
                 <span class="eyebrow">Operations Feed</span>
-                <h2>현장 로그</h2>
+                <h2>Control Log</h2>
               </div>
             </div>
             <div class="log-stack" data-log></div>
@@ -104,15 +103,17 @@ root.innerHTML = `
           <div class="panel-head">
             <div>
               <span class="eyebrow">Live Roster</span>
-              <h2>현장 인력</h2>
+              <h2>Employee Network</h2>
             </div>
             <div class="panel-actions">
-              <button data-filter="all" class="is-active">전체</button>
-              <button data-filter="shift">교대</button>
-              <button data-filter="day">일근</button>
+              <button data-filter="all" class="is-active">All</button>
+              <button data-filter="shift">Shift</button>
+              <button data-filter="day">Day</button>
             </div>
           </div>
-          <p class="hint-text">직원을 드래그해서 아래 배치 슬롯에 놓으세요. 칩의 X 버튼으로 해제할 수 있습니다.</p>
+          <p class="hint-text">
+            Drag people into future slots to rework staffing. Remove a slot assignment with the small x button.
+          </p>
           <div class="roster-list" data-roster></div>
           <div class="employee-detail" data-employee-detail></div>
         </section>
@@ -121,13 +122,13 @@ root.innerHTML = `
           <div class="panel-head">
             <div>
               <span class="eyebrow">Talent & Transfer</span>
-              <h2>승계 / 교육</h2>
+              <h2>Succession Desk</h2>
             </div>
             <div class="panel-actions">
-              <button data-action="auto-mentor">멘토 자동매칭</button>
-              <button data-action="run-training">집중훈련</button>
-              <button data-action="run-handover">지식이전</button>
-              <button data-action="emergency-recruit">긴급채용</button>
+              <button data-action="auto-mentor">Auto Mentor</button>
+              <button data-action="run-training">Training</button>
+              <button data-action="run-handover">Handover</button>
+              <button data-action="emergency-recruit">Emergency Hire</button>
             </div>
           </div>
           <div class="talent-board" data-talent></div>
@@ -137,7 +138,7 @@ root.innerHTML = `
           <div class="panel-head">
             <div>
               <span class="eyebrow">Cherry Blossom Window</span>
-              <h2>벚꽃동산 이벤트</h2>
+              <h2>Community Event</h2>
             </div>
           </div>
           <div class="event-center" data-event></div>
@@ -150,7 +151,7 @@ root.innerHTML = `
         <div class="panel-head">
           <div>
             <span class="eyebrow">4 Crew / 2 Shift Workforce Planning</span>
-            <h2>교대 배치 캘린더</h2>
+            <h2>Assignment Board</h2>
           </div>
           <div class="panel-actions">
             <button data-action="undo">Undo</button>
@@ -166,7 +167,7 @@ root.innerHTML = `
         <div class="panel-head">
           <div>
             <span class="eyebrow">KPI / Strategy / Onboarding</span>
-            <h2>지표와 운영 가이드</h2>
+            <h2>Operations Guide</h2>
           </div>
         </div>
         <div class="dashboard-grid" data-dashboards></div>

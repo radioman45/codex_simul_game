@@ -1,1016 +1,123 @@
+import { createAudioState, playSfx, toggleAudio } from "./gameAudio.js";
+import { drawMinimap, drawScene } from "./gameCanvas.js";
+import { createBlossomPlan, createEmployees, createPool, HORIZON, INITIAL_CASH, MEDIA, OFFSETS, PATTERN, START, TEMPLATES, WEATHER } from "./gameData.js";
+import { buildConflicts, renderUi } from "./gameUi.js";
+import { PERIOD_MS, addDays, avg, choice, clamp, lerp, md, money, randInt, stamp, uniq } from "./gameUtils.js";
+
 export function createGame({ canvas, minimapCanvas, statsRoot }) {
-  const ctx = canvas.getContext("2d");
-  const minimapCtx = minimapCanvas.getContext("2d");
-
-  const TILE_W = 64;
-  const TILE_H = 32;
-  const MAP_W = 18;
-  const MAP_H = 18;
-  const DIRECTIONS = [
-    [1, 0],
-    [-1, 0],
-    [0, 1],
-    [0, -1],
-  ];
-
-  const BUILDINGS = {
-    path: {
-      id: "path",
-      name: "산책로",
-      category: "infra",
-      cost: 40,
-      upkeep: 1,
-      revenue: 0,
-      footprint: [1, 1],
-      queueCap: 0,
-      cleanHit: 0,
-      wearHit: 0,
-      colors: ["#d2dce8", "#aab7c8", "#909fb3"],
-    },
-    rideFerris: {
-      id: "rideFerris",
-      name: "스카이휠",
-      category: "ride",
-      cost: 8500,
-      upkeep: 28,
-      revenue: 120,
-      footprint: [2, 2],
-      queueCap: 6,
-      cleanHit: 0.12,
-      wearHit: 0.15,
-      colors: ["#ffd168", "#e1aa50", "#ce7d3e"],
-    },
-    rideCoaster: {
-      id: "rideCoaster",
-      name: "썬셋 코스터",
-      category: "ride",
-      cost: 14000,
-      upkeep: 45,
-      revenue: 180,
-      footprint: [3, 2],
-      queueCap: 8,
-      cleanHit: 0.18,
-      wearHit: 0.2,
-      colors: ["#ff9a7a", "#df6f59", "#bc4e49"],
-    },
-    shopSnack: {
-      id: "shopSnack",
-      name: "캔디 카트",
-      category: "shop",
-      cost: 4200,
-      upkeep: 14,
-      revenue: 65,
-      footprint: [1, 1],
-      queueCap: 4,
-      cleanHit: 0.06,
-      wearHit: 0.05,
-      colors: ["#6ce1c3", "#44b39a", "#2d8b77"],
-    },
-    facilityRestroom: {
-      id: "facilityRestroom",
-      name: "가든 화장실",
-      category: "facility",
-      cost: 3000,
-      upkeep: 9,
-      revenue: 0,
-      footprint: [1, 1],
-      queueCap: 2,
-      cleanHit: -0.2,
-      wearHit: 0.04,
-      colors: ["#9cc4ff", "#7096d7", "#496eb0"],
-    },
-    facilityJanitor: {
-      id: "facilityJanitor",
-      name: "정비 창고",
-      category: "facility",
-      cost: 5200,
-      upkeep: 10,
-      revenue: 0,
-      footprint: [1, 1],
-      queueCap: 0,
-      cleanHit: -0.15,
-      wearHit: -0.22,
-      colors: ["#c69cff", "#9b74d4", "#7a58b0"],
-    },
+  const ctx = canvas?.getContext("2d");
+  const mini = minimapCanvas?.getContext("2d");
+  if (!ctx || !mini || !statsRoot) return;
+  const employees = createEmployees();
+  const refs = {
+    root: statsRoot, run: statsRoot.querySelector("[data-action='toggle-run']"), audio: statsRoot.querySelector("[data-action='open-audio']"), title: statsRoot.querySelector("[data-scene-title]"),
+    roster: statsRoot.querySelector("[data-roster]"), detail: statsRoot.querySelector("[data-employee-detail]"), talent: statsRoot.querySelector("[data-talent]"), event: statsRoot.querySelector("[data-event]"), pattern: statsRoot.querySelector("[data-pattern]"),
+    conflicts: statsRoot.querySelector("[data-conflicts]"), board: statsRoot.querySelector("[data-board]"), dash: statsRoot.querySelector("[data-dashboards]"), tutorial: statsRoot.querySelector("[data-tutorial]"), log: statsRoot.querySelector("[data-log]"),
+    alert: statsRoot.querySelector("[data-overlay='alerts']"), clock: statsRoot.querySelector("[data-overlay='clock']"), legend: statsRoot.querySelector("[data-overlay='legend']")
   };
-
-  const BUILD_ORDER = ["path", "rideFerris", "rideCoaster", "shopSnack", "facilityRestroom", "facilityJanitor"];
-
   const state = {
-    time: 8,
-    day: 1,
-    weather: "Sunny",
-    weatherTimer: 0,
-    cash: 50000,
-    dayIncome: 0,
-    cleanliness: 84,
-    maintenance: 88,
-    stars: 1.4,
-    bankruptcyWarning: false,
-    selectedBuild: "path",
-    hoverTile: null,
-    camera: { x: canvas.width / 2, y: 140, zoom: 1 },
-    dragging: false,
-    lastMouse: { x: 0, y: 0 },
-    nextId: 1,
-    builds: [],
-    visitors: [],
-    grid: Array.from({ length: MAP_W }, () => Array(MAP_H).fill("grass")),
-    occupancy: Array.from({ length: MAP_W }, () => Array(MAP_H).fill(null)),
-    undoStack: [],
-    redoStack: [],
-    toasts: [],
-    tutorialSteps: [
-      { id: "buildRide", text: "놀이기구를 하나 배치해 첫 손님을 끌어오세요.", done: false },
-      { id: "buildShop", text: "상점을 지어 손님 만족도와 수익을 올리세요.", done: false },
-      { id: "reachTwoStars", text: "청결과 정비를 관리해 별점 2.0을 달성하세요.", done: false },
-      { id: "survive", text: "현금을 유지하며 파산 경고 없이 운영하세요.", done: false },
-    ],
-    audio: null,
-    lastEconomyTick: 0,
-    spawnTick: 0,
+    canvas, minimapCanvas, ctx, mini, refs, employees, map: new Map(employees.map((employee) => [employee.id, employee])), pool: createPool(), slots: {}, byPeriod: {}, horizon: -1, current: 0, running: false, runAcc: 0, frame: 0, last: performance.now(),
+    filter: "all", selected: employees[0]?.id || null, drag: null, history: [], future: [], logs: [], dirty: true, focus: "core", pan: { x: 0, y: 0 }, target: { x: -60, y: 20 }, weather: {}, nextEvt: randInt(4, 6),
+    blossom: createBlossomPlan(), mods: { market: 1, reg: 0.18, labor: 0.12, recruit: 0.08, bloomBias: 0 }, progs: { training: 0, handover: 0 }, audio: createAudioState(),
+    stats: { cash: INITIAL_CASH, uptime: 91, trir: 0.62, harmony: 76, community: 69, fatigue: avg(employees.map((employee) => employee.fatigue)), succession: 0 },
+    fin: { revenue: 0, salary: 0, overtime: 0, training: 0, recruit: 0, welfare: 0, event: 0, last: { net: 0, revenue: 0, salary: 0, overtime: 0, training: 0, welfare: 0, event: 0 } },
+    alerts: [],
   };
-
-  seedPaths();
-  addInitialBuildings();
-  buildUi();
-  bindEvents();
-  startAudio();
-
-  let lastFrame = performance.now();
-  requestAnimationFrame(loop);
-
-  function seedPaths() {
-    for (let x = 2; x < 15; x += 1) {
-      placeBuilding("path", x, 9, false);
-    }
-    for (let y = 5; y < 14; y += 1) {
-      placeBuilding("path", 5, y, false);
-      placeBuilding("path", 11, y, false);
-    }
-  }
-
-  function addInitialBuildings() {
-    placeBuilding("facilityRestroom", 4, 8, false);
-    placeBuilding("shopSnack", 6, 10, false);
-    placeBuilding("rideFerris", 8, 7, false);
-    placeBuilding("facilityJanitor", 12, 10, false);
-  }
-
-  function buildUi() {
-    const buildGrid = statsRoot.querySelector("[data-build-grid]");
-    BUILD_ORDER.forEach((id) => {
-      const config = BUILDINGS[id];
-      const button = document.createElement("button");
-      button.dataset.build = id;
-      button.innerHTML = `${config.name}<small>$${config.cost.toLocaleString()} · 유지비 ${config.upkeep}/tick</small>`;
-      button.classList.toggle("active", id === state.selectedBuild);
-      buildGrid.appendChild(button);
-    });
-    renderTutorial();
-    syncHud();
-  }
-
-  function bindEvents() {
-    canvas.addEventListener("mousemove", onPointerMove);
-    canvas.addEventListener("mousedown", onPointerDown);
-    window.addEventListener("mouseup", () => {
-      state.dragging = false;
-    });
-    canvas.addEventListener("wheel", onWheel, { passive: false });
-    canvas.addEventListener("contextmenu", (event) => event.preventDefault());
-
-    statsRoot.querySelectorAll("[data-build]").forEach((button) => {
-      button.addEventListener("click", () => {
-        state.selectedBuild = button.dataset.build;
-        syncBuildButtons();
-        syncHud();
-      });
-    });
-
-    statsRoot.querySelector("[data-action='undo']").addEventListener("click", undo);
-    statsRoot.querySelector("[data-action='redo']").addEventListener("click", redo);
-    statsRoot.querySelector("[data-action='clean']").addEventListener("click", () => {
-      state.cash -= 400;
-      state.cleanliness = clamp(state.cleanliness + 10, 0, 100);
-      addToast("청소 인력이 공원을 정돈했습니다.");
-      playSfx("clean");
-    });
-    statsRoot.querySelector("[data-action='repair']").addEventListener("click", () => {
-      state.cash -= 650;
-      state.maintenance = clamp(state.maintenance + 12, 0, 100);
-      addToast("정비 팀이 주요 시설을 점검했습니다.");
-      playSfx("repair");
-    });
-  }
-
-  function onPointerMove(event) {
-    const { x, y } = eventToCanvas(event);
-    if (state.dragging) {
-      state.camera.x += x - state.lastMouse.x;
-      state.camera.y += y - state.lastMouse.y;
-      state.lastMouse = { x, y };
-      return;
-    }
-    state.hoverTile = screenToGrid(x, y);
-  }
-
-  function onPointerDown(event) {
-    const { x, y } = eventToCanvas(event);
-    if (event.button === 1 || event.shiftKey) {
-      state.dragging = true;
-      state.lastMouse = { x, y };
-      return;
-    }
-
-    const tile = screenToGrid(x, y);
-    if (!tile) {
-      return;
-    }
-
-    if (event.button === 2) {
-      state.selectedBuild = "path";
-      syncBuildButtons();
-      syncHud();
-      return;
-    }
-
-    placeBuilding(state.selectedBuild, tile.x, tile.y, true);
-  }
-
-  function onWheel(event) {
-    event.preventDefault();
-    state.camera.zoom = clamp(state.camera.zoom + (event.deltaY > 0 ? -0.08 : 0.08), 0.6, 1.5);
-  }
-
-  function loop(now) {
-    const delta = Math.min(0.05, (now - lastFrame) / 1000);
-    lastFrame = now;
-
-    updateTime(delta);
-    updateWeather(delta);
-    updateEconomy(now);
-    spawnVisitors(now);
-    updateVisitors(delta);
-    updateRating();
-    updateTutorial();
-    syncHud();
-    render();
-    requestAnimationFrame(loop);
-  }
-
-  function updateTime(delta) {
-    state.time += delta * 0.45;
-    if (state.time >= 24) {
-      state.time -= 24;
-      state.day += 1;
-      state.dayIncome = 0;
-    }
-  }
-
-  function updateWeather(delta) {
-    state.weatherTimer += delta;
-    if (state.weatherTimer < 18) {
-      return;
-    }
-    state.weatherTimer = 0;
-    const roll = Math.random();
-    state.weather = roll < 0.58 ? "Sunny" : roll < 0.8 ? "Cloudy" : roll < 0.93 ? "Rainy" : "Windy";
-    addToast(`날씨 변화: ${weatherLabel(state.weather)}`);
-  }
-
-  function updateEconomy(now) {
-    if (now - state.lastEconomyTick < 1000) {
-      return;
-    }
-    state.lastEconomyTick = now;
-
-    let upkeep = 0;
-    let dirt = 0;
-    let wear = 0;
-    state.builds.forEach((build) => {
-      const config = BUILDINGS[build.kind];
-      upkeep += config.upkeep;
-      dirt += config.cleanHit;
-      wear += config.wearHit;
-    });
-
-    if (state.weather === "Rainy") {
-      dirt += 0.4;
-    }
-    if (state.weather === "Windy") {
-      wear += 0.25;
-    }
-
-    state.cash -= upkeep;
-    state.dayIncome -= upkeep;
-    state.cleanliness = clamp(state.cleanliness - dirt, 0, 100);
-    state.maintenance = clamp(state.maintenance - wear, 0, 100);
-    state.bankruptcyWarning = state.cash < 4000;
-
-    if (state.cash < 0) {
-      addToast("파산 경고: 수익을 확보하거나 비용을 줄이세요.");
-    }
-  }
-
-  function spawnVisitors(now) {
-    const rideCount = state.builds.filter((build) => BUILDINGS[build.kind].category === "ride").length;
-    if (!rideCount) {
-      return;
-    }
-    const interval = state.weather === "Rainy" ? 2800 : 1600;
-    if (now - state.spawnTick < interval) {
-      return;
-    }
-    state.spawnTick = now;
-
-    const targets = state.builds.filter((build) => BUILDINGS[build.kind].queueCap > 0);
-    if (!targets.length) {
-      return;
-    }
-    const target = targets[Math.floor(Math.random() * targets.length)];
-    const queueEntry = getQueueEntry(target);
-    const path = findPath({ x: 2, y: 9 }, queueEntry);
-    if (!path.length) {
-      return;
-    }
-
-    state.visitors.push({
-      id: state.nextId++,
-      x: 2,
-      y: 9,
-      mood: 62 + Math.random() * 18,
-      emotion: "curious",
-      speed: 1.9 + Math.random() * 0.7,
-      spendBias: 0.8 + Math.random() * 0.6,
-      path,
-      pathIndex: 0,
-      targetId: target.id,
-      queueTicks: 0,
-    });
-  }
-
-  function updateVisitors(delta) {
-    const survivors = [];
-    state.visitors.forEach((visitor) => {
-      const target = state.builds.find((build) => build.id === visitor.targetId);
-      if (target) {
-        const queueEntry = getQueueEntry(target);
-        const reachedQueue = Math.abs(visitor.x - queueEntry.x) + Math.abs(visitor.y - queueEntry.y) < 0.08;
-        if (reachedQueue && target.queue.length < BUILDINGS[target.kind].queueCap) {
-          if (!target.queue.includes(visitor.id)) {
-            target.queue.push(visitor.id);
-            playSfx("queue");
-          }
-          processQueue(visitor, target, delta);
-        } else if (reachedQueue) {
-          visitor.mood -= 5;
-          sendVisitorHome(visitor, queueEntry, "annoyed");
-        } else {
-          followPath(visitor, delta);
-        }
-      } else {
-        followPath(visitor, delta);
-      }
-
-      if (visitor.targetId === null) {
-        followPath(visitor, delta);
-        if (Math.abs(visitor.x - 2) + Math.abs(visitor.y - 9) < 0.08) {
-          return;
-        }
-      }
-
-      survivors.push(visitor);
-    });
-    state.visitors = survivors;
-  }
-
-  function processQueue(visitor, target, delta) {
-    visitor.queueTicks += delta;
-    visitor.emotion = visitor.queueTicks > 6 ? "impatient" : "excited";
-    visitor.mood -= delta * (visitor.queueTicks > 6 ? 2.2 : 0.2);
-    if (visitor.queueTicks > 9) {
-      target.queue = target.queue.filter((id) => id !== visitor.id);
-      sendVisitorHome(visitor, getQueueEntry(target), "annoyed");
-      return;
-    }
-    if (visitor.queueTicks > 3.5) {
-      serveVisitor(visitor, target);
-      target.queue = target.queue.filter((id) => id !== visitor.id);
-      sendVisitorHome(visitor, getQueueEntry(target), "delighted");
-    }
-  }
-
-  function serveVisitor(visitor, target) {
-    const config = BUILDINGS[target.kind];
-    const weatherBoost = state.weather === "Sunny" ? 1.1 : state.weather === "Rainy" ? 0.75 : 1;
-    const income = Math.round(config.revenue * visitor.spendBias * weatherBoost);
-    state.cash += income;
-    state.dayIncome += income;
-    state.cleanliness = clamp(state.cleanliness - 0.25 + (config.category === "facility" ? 0.12 : 0), 0, 100);
-    visitor.mood = clamp(visitor.mood + (config.category === "ride" ? 16 : config.category === "shop" ? 8 : 5), 0, 100);
-    target.lastServed = performance.now();
-    addToast(`${config.name} 수익 +$${income}`);
-    playSfx("coin");
-  }
-
-  function sendVisitorHome(visitor, from, emotion) {
-    visitor.path = findPath(from, { x: 2, y: 9 });
-    visitor.pathIndex = 0;
-    visitor.targetId = null;
-    visitor.queueTicks = 0;
-    visitor.emotion = emotion;
-  }
-
-  function followPath(visitor, delta) {
-    const next = visitor.path[visitor.pathIndex];
-    if (!next) {
-      return;
-    }
-    const dx = next.x - visitor.x;
-    const dy = next.y - visitor.y;
-    const distance = Math.hypot(dx, dy);
-    if (distance < 0.03) {
-      visitor.x = next.x;
-      visitor.y = next.y;
-      visitor.pathIndex += 1;
-      return;
-    }
-    const step = Math.min(visitor.speed * delta, distance);
-    visitor.x += (dx / distance) * step;
-    visitor.y += (dy / distance) * step;
-    if (visitor.mood > 74) {
-      visitor.emotion = "happy";
-    } else if (visitor.mood < 42) {
-      visitor.emotion = "tired";
-    }
-  }
-
-  function updateRating() {
-    const attractions = state.builds.filter((build) => ["ride", "shop"].includes(BUILDINGS[build.kind].category)).length;
-    const attractionScore = attractions * 0.22;
-    const operations = (state.cleanliness + state.maintenance) / 100;
-    const moodScore = state.visitors.length
-      ? state.visitors.reduce((sum, visitor) => sum + visitor.mood, 0) / state.visitors.length / 100
-      : 0.74;
-    state.stars = clamp(1 + attractionScore + operations + moodScore, 0.5, 5);
-  }
-
-  function updateTutorial() {
-    const previous = JSON.stringify(state.tutorialSteps.map((step) => step.done));
-    findTutorial("buildRide").done = state.builds.some((build) => BUILDINGS[build.kind].category === "ride");
-    findTutorial("buildShop").done = state.builds.some((build) => BUILDINGS[build.kind].category === "shop");
-    findTutorial("reachTwoStars").done = state.stars >= 2;
-    findTutorial("survive").done = !state.bankruptcyWarning;
-    if (previous !== JSON.stringify(state.tutorialSteps.map((step) => step.done))) {
-      renderTutorial();
-    }
-  }
-
-  function renderTutorial() {
-    const stack = statsRoot.querySelector("[data-tutorial]");
-    stack.innerHTML = "";
-    state.tutorialSteps.forEach((step) => {
-      const card = document.createElement("div");
-      card.className = `tutorial-card${step.done ? " done" : ""}`;
-      card.innerHTML = `<strong>${step.done ? "완료" : "가이드"}</strong><p>${step.text}</p>`;
-      stack.appendChild(card);
-    });
-  }
-
-  function syncHud() {
-    setStat("cash", money(state.cash));
-    setStat("profit", money(state.dayIncome));
-    setStat("cleanliness", `${state.cleanliness.toFixed(0)}%`);
-    setStat("maintenance", `${state.maintenance.toFixed(0)}%`);
-    setStat("stars", `${state.stars.toFixed(1)} ★`);
-    setStat("weather", weatherLabel(state.weather));
-    setStat("visitors", `${state.visitors.length}명`);
-    setStat(
-      "queues",
-      `${state.builds.reduce((sum, build) => sum + build.queue.length, 0)} / ${state.builds.reduce(
-        (sum, build) => sum + BUILDINGS[build.kind].queueCap,
-        0,
-      )}`,
-    );
-    setStat("bankruptcy", state.bankruptcyWarning ? "주의" : "안정");
-    setStat(
-      "goal",
-      state.stars < 2 ? "별점 2.0 달성" : state.cleanliness < 70 ? "청결 회복" : state.maintenance < 70 ? "정비 회복" : "확장 운영",
-    );
-    statsRoot.querySelector("[data-selected-build]").textContent = `선택된 건물: ${BUILDINGS[state.selectedBuild].name}`;
-
-    const strip = statsRoot.querySelector("[data-overlay='top']");
-    const visibleToasts = state.toasts.slice(-4);
-    strip.innerHTML = visibleToasts.map((toast) => `<div class="toast">${toast.message}</div>`).join("");
-
-    const clock = statsRoot.querySelector("[data-overlay='clock']");
-    const hour = String(Math.floor(state.time)).padStart(2, "0");
-    const minute = String(Math.floor((state.time % 1) * 60)).padStart(2, "0");
-    clock.textContent = `Day ${state.day} · ${hour}:${minute}`;
-  }
-
-  function render() {
-    const nightFactor = Math.abs(12 - state.time) / 12;
-    const sky = ctx.createLinearGradient(0, 0, 0, canvas.height);
-    sky.addColorStop(0, mixColors("#8fd7ff", "#09101d", nightFactor * 0.85));
-    sky.addColorStop(1, mixColors("#4c8a55", "#070d18", nightFactor));
-    ctx.fillStyle = sky;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    renderWeatherBackdrop();
-    renderGrid();
-    renderBuildings();
-    renderVisitors();
-    renderHover();
-    renderMinimap();
-  }
-
-  function renderWeatherBackdrop() {
-    if (state.weather === "Cloudy") {
-      ctx.fillStyle = "rgba(220, 233, 255, 0.08)";
-      for (let i = 0; i < 7; i += 1) {
-        ctx.beginPath();
-        ctx.ellipse(150 + i * 160, 110 + (i % 2) * 24, 85, 28, 0, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-    if (state.weather === "Rainy") {
-      ctx.strokeStyle = "rgba(185, 220, 255, 0.22)";
-      for (let i = 0; i < 60; i += 1) {
-        const x = (i * 37 + performance.now() * 0.15) % canvas.width;
-        const y = (i * 23 + performance.now() * 0.25) % canvas.height;
-        ctx.beginPath();
-        ctx.moveTo(x, y);
-        ctx.lineTo(x - 10, y + 16);
-        ctx.stroke();
-      }
-    }
-  }
-
-  function renderGrid() {
-    for (let y = 1; y < MAP_H - 1; y += 1) {
-      for (let x = 1; x < MAP_W - 1; x += 1) {
-        const screen = gridToScreen(x, y);
-        const path = state.grid[x][y] === "path";
-        drawPrism(screen.x, screen.y, TILE_W / 2, TILE_H / 2, 8, path ? "#c9d3df" : "#6dbb6e", path ? "#aab8c9" : "#4f8f52", path ? "#95a4b5" : "#3e7641");
-      }
-    }
-  }
-
-  function renderBuildings() {
-    [...state.builds]
-      .sort((a, b) => a.y - b.y || a.x - b.x)
-      .forEach((build) => {
-        const config = BUILDINGS[build.kind];
-        const center = gridToScreen(build.x + config.footprint[0] / 2 - 0.5, build.y + config.footprint[1] / 2 - 0.5);
-        const size = 18 + (config.footprint[0] + config.footprint[1]) * 10;
-        drawPrism(center.x, center.y - 24, size, size * 0.6, 24 + config.footprint[1] * 8, ...config.colors);
-
-        if (config.category === "ride") {
-          ctx.strokeStyle = "rgba(255,255,255,0.52)";
-          ctx.lineWidth = 4;
-          ctx.beginPath();
-          ctx.arc(center.x, center.y - 48, size * 0.7, 0, Math.PI * 2);
-          ctx.stroke();
-        }
-
-        if (performance.now() - build.lastServed < 1600) {
-          ctx.fillStyle = "rgba(247,198,106,0.15)";
-          ctx.beginPath();
-          ctx.arc(center.x, center.y - 52, 32, 0, Math.PI * 2);
-          ctx.fill();
-        }
-
-        if (build.queue.length) {
-          ctx.fillStyle = "rgba(8,17,31,0.8)";
-          ctx.fillRect(center.x - 18, center.y - 88, 36, 18);
-          ctx.fillStyle = "#fff";
-          ctx.font = "12px DM Sans";
-          ctx.textAlign = "center";
-          ctx.fillText(`${build.queue.length}`, center.x, center.y - 75);
-        }
-      });
-  }
-
-  function renderVisitors() {
-    state.visitors.forEach((visitor) => {
-      const screen = gridToScreen(visitor.x, visitor.y);
-      const color =
-        visitor.emotion === "delighted"
-          ? "#f7c66a"
-          : visitor.emotion === "impatient" || visitor.emotion === "annoyed"
-            ? "#ff7d6d"
-            : visitor.emotion === "happy"
-              ? "#5fd1b8"
-              : "#d6e4ff";
-      ctx.fillStyle = "#17314f";
-      ctx.beginPath();
-      ctx.ellipse(screen.x, screen.y - 4, 8, 5, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.arc(screen.x, screen.y - 16, 7, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "rgba(255,255,255,0.24)";
-      ctx.fillRect(screen.x - 10, screen.y - 32, 20, 4);
-      ctx.fillStyle = color;
-      ctx.fillRect(screen.x - 10, screen.y - 32, Math.max(4, visitor.mood / 5), 4);
-    });
-  }
-
-  function renderHover() {
-    if (!state.hoverTile || !insideMap(state.hoverTile.x, state.hoverTile.y)) {
-      return;
-    }
-    const screen = gridToScreen(state.hoverTile.x, state.hoverTile.y);
-    const valid = canPlace(state.selectedBuild, state.hoverTile.x, state.hoverTile.y);
-    ctx.save();
-    ctx.globalAlpha = 0.7;
-    ctx.strokeStyle = valid ? "#5fd1b8" : "#ff7d6d";
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(screen.x, screen.y - (TILE_H / 2) * state.camera.zoom);
-    ctx.lineTo(screen.x + (TILE_W / 2) * state.camera.zoom, screen.y);
-    ctx.lineTo(screen.x, screen.y + (TILE_H / 2) * state.camera.zoom);
-    ctx.lineTo(screen.x - (TILE_W / 2) * state.camera.zoom, screen.y);
-    ctx.closePath();
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  function renderMinimap() {
-    minimapCtx.clearRect(0, 0, minimapCanvas.width, minimapCanvas.height);
-    minimapCtx.fillStyle = "#0c1628";
-    minimapCtx.fillRect(0, 0, minimapCanvas.width, minimapCanvas.height);
-
-    const tileW = minimapCanvas.width / MAP_W;
-    const tileH = minimapCanvas.height / MAP_H;
-    for (let y = 0; y < MAP_H; y += 1) {
-      for (let x = 0; x < MAP_W; x += 1) {
-        minimapCtx.fillStyle = state.grid[x][y] === "path" ? "#bfcfe2" : "#3c7e49";
-        minimapCtx.fillRect(x * tileW, y * tileH, tileW - 1, tileH - 1);
-      }
-    }
-
-    state.builds.forEach((build) => {
-      minimapCtx.fillStyle =
-        BUILDINGS[build.kind].category === "ride"
-          ? "#ffbf69"
-          : BUILDINGS[build.kind].category === "shop"
-            ? "#5fd1b8"
-            : "#8ab4ff";
-      minimapCtx.fillRect(
-        build.x * tileW,
-        build.y * tileH,
-        BUILDINGS[build.kind].footprint[0] * tileW,
-        BUILDINGS[build.kind].footprint[1] * tileH,
-      );
-    });
-
-    state.visitors.slice(0, 50).forEach((visitor) => {
-      minimapCtx.fillStyle = "#fff8d3";
-      minimapCtx.fillRect(visitor.x * tileW, visitor.y * tileH, 3, 3);
-    });
-  }
-
-  function placeBuilding(kind, x, y, trackHistory) {
-    if (!canPlace(kind, x, y)) {
-      if (trackHistory) {
-        addToast("이 위치에는 배치할 수 없습니다.");
-        playSfx("error");
-      }
-      return null;
-    }
-
-    const config = BUILDINGS[kind];
-    if (trackHistory && state.cash < config.cost) {
-      addToast("자금이 부족합니다.");
-      playSfx("error");
-      return null;
-    }
-
-    const build = {
-      id: state.nextId++,
-      kind,
-      x,
-      y,
-      queue: [],
-      lastServed: 0,
-    };
-
-    state.builds.push(build);
-    stampBuilding(build, true);
-    if (trackHistory) {
-      state.cash -= config.cost;
-      state.dayIncome -= config.cost;
-      state.undoStack.push({ type: "place", kind, x, y, cost: config.cost });
-      state.redoStack = [];
-      addToast(`${config.name} 배치 완료`);
-      playSfx("build");
-    }
-    return build;
-  }
-
-  function stampBuilding(build, occupied) {
-    const [width, height] = BUILDINGS[build.kind].footprint;
-    for (let dx = 0; dx < width; dx += 1) {
-      for (let dy = 0; dy < height; dy += 1) {
-        state.occupancy[build.x + dx][build.y + dy] = occupied ? build.id : null;
-        if (build.kind === "path") {
-          state.grid[build.x + dx][build.y + dy] = occupied ? "path" : "grass";
-        }
-      }
-    }
-  }
-
-  function canPlace(kind, x, y) {
-    const [width, height] = BUILDINGS[kind].footprint;
-    for (let dx = 0; dx < width; dx += 1) {
-      for (let dy = 0; dy < height; dy += 1) {
-        const tx = x + dx;
-        const ty = y + dy;
-        if (!insideMap(tx, ty) || state.occupancy[tx][ty]) {
-          return false;
-        }
-      }
-    }
-    if (kind === "path") {
-      return true;
-    }
-    const entry = getQueueEntry({ kind, x, y });
-    return DIRECTIONS.some(([dx, dy]) => {
-      const nx = entry.x + dx;
-      const ny = entry.y + dy;
-      return insideMap(nx, ny) && state.grid[nx][ny] === "path";
-    });
-  }
-
-  function undo() {
-    const action = state.undoStack.pop();
-    if (!action) {
-      return;
-    }
-    if (action.type === "place") {
-      const removed = removeBuildingAt(action.kind, action.x, action.y);
-      if (!removed) {
-        return;
-      }
-      state.cash += action.cost;
-      state.dayIncome += action.cost;
-      state.redoStack.push(action);
-      addToast("배치를 되돌렸습니다.");
-    }
-  }
-
-  function redo() {
-    const action = state.redoStack.pop();
-    if (!action) {
-      return;
-    }
-    const rebuilt = placeBuilding(action.kind, action.x, action.y, false);
-    if (!rebuilt) {
-      return;
-    }
-    state.cash -= action.cost;
-    state.dayIncome -= action.cost;
-    state.undoStack.push(action);
-    addToast("배치를 다시 적용했습니다.");
-  }
-
-  function removeBuildingAt(kind, x, y) {
-    const index = state.builds.findIndex((build) => build.kind === kind && build.x === x && build.y === y);
-    if (index < 0) {
-      return false;
-    }
-    const [build] = state.builds.splice(index, 1);
-    stampBuilding(build, false);
-    return true;
-  }
-
-  function screenToGrid(screenX, screenY) {
-    const x = (screenX - state.camera.x) / state.camera.zoom;
-    const y = (screenY - state.camera.y) / state.camera.zoom;
-    const gridX = (x / (TILE_W / 2) + y / (TILE_H / 2)) / 2;
-    const gridY = (y / (TILE_H / 2) - x / (TILE_W / 2)) / 2;
-    return { x: Math.floor(gridX), y: Math.floor(gridY) };
-  }
-
-  function gridToScreen(gridX, gridY) {
-    return {
-      x: state.camera.x + (gridX - gridY) * (TILE_W / 2) * state.camera.zoom,
-      y: state.camera.y + (gridX + gridY) * (TILE_H / 2) * state.camera.zoom,
-    };
-  }
-
-  function findPath(start, end) {
-    const frontier = [start];
-    const key = (point) => `${point.x},${point.y}`;
-    const visited = new Set([key(start)]);
-    const cameFrom = new Map();
-
-    while (frontier.length) {
-      const current = frontier.shift();
-      if (current.x === end.x && current.y === end.y) {
-        break;
-      }
-      DIRECTIONS.forEach(([dx, dy]) => {
-        const nx = current.x + dx;
-        const ny = current.y + dy;
-        const tileKey = `${nx},${ny}`;
-        if (!insideMap(nx, ny) || visited.has(tileKey)) {
-          return;
-        }
-        if (state.grid[nx][ny] !== "path" && !(nx === end.x && ny === end.y)) {
-          return;
-        }
-        visited.add(tileKey);
-        frontier.push({ x: nx, y: ny });
-        cameFrom.set(tileKey, current);
-      });
-    }
-
-    const result = [];
-    let current = end;
-    while (current && !(current.x === start.x && current.y === start.y)) {
-      result.unshift({ x: current.x, y: current.y });
-      current = cameFrom.get(key(current));
-      if (!current) {
-        return [];
-      }
-    }
-    return result;
-  }
-
-  function getQueueEntry(build) {
-    const [width, height] = BUILDINGS[build.kind].footprint;
-    return { x: build.x + Math.floor(width / 2), y: build.y + height };
-  }
-
-  function syncBuildButtons() {
-    statsRoot.querySelectorAll("[data-build]").forEach((node) => {
-      node.classList.toggle("active", node.dataset.build === state.selectedBuild);
-    });
-  }
-
-  function findTutorial(id) {
-    return state.tutorialSteps.find((step) => step.id === id);
-  }
-
-  function addToast(message) {
-    state.toasts.push({ message, createdAt: performance.now() });
-    state.toasts = state.toasts.filter((toast) => performance.now() - toast.createdAt < 4200);
-  }
-
-  function setStat(key, value) {
-    const node = statsRoot.querySelector(`[data-stat='${key}']`);
-    if (node) {
-      node.textContent = value;
-    }
-  }
-
-  function eventToCanvas(event) {
-    const rect = canvas.getBoundingClientRect();
-    return {
-      x: (event.clientX - rect.left) * (canvas.width / rect.width),
-      y: (event.clientY - rect.top) * (canvas.height / rect.height),
-    };
-  }
-
-  function drawPrism(x, y, halfW, halfH, height, top, left, right) {
-    ctx.beginPath();
-    ctx.moveTo(x, y - halfH * state.camera.zoom);
-    ctx.lineTo(x + halfW * state.camera.zoom, y);
-    ctx.lineTo(x, y + halfH * state.camera.zoom);
-    ctx.lineTo(x - halfW * state.camera.zoom, y);
-    ctx.closePath();
-    ctx.fillStyle = top;
-    ctx.fill();
-    ctx.strokeStyle = "rgba(10, 16, 30, 0.35)";
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.moveTo(x - halfW * state.camera.zoom, y);
-    ctx.lineTo(x, y + halfH * state.camera.zoom);
-    ctx.lineTo(x, y + (halfH + height) * state.camera.zoom);
-    ctx.lineTo(x - halfW * state.camera.zoom, y + height * state.camera.zoom);
-    ctx.closePath();
-    ctx.fillStyle = left;
-    ctx.fill();
-
-    ctx.beginPath();
-    ctx.moveTo(x + halfW * state.camera.zoom, y);
-    ctx.lineTo(x, y + halfH * state.camera.zoom);
-    ctx.lineTo(x, y + (halfH + height) * state.camera.zoom);
-    ctx.lineTo(x + halfW * state.camera.zoom, y + height * state.camera.zoom);
-    ctx.closePath();
-    ctx.fillStyle = right;
-    ctx.fill();
-  }
-
-  function startAudio() {
-    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContextClass) {
-      return;
-    }
-    state.audio = new AudioContextClass();
-    const resume = () => {
-      if (state.audio.state === "suspended") {
-        state.audio.resume();
-      }
-      if (!state.audio._musicStarted) {
-        startMusic();
-        state.audio._musicStarted = true;
-      }
-      window.removeEventListener("pointerdown", resume);
-    };
-    window.addEventListener("pointerdown", resume);
-  }
-
-  function startMusic() {
-    const master = state.audio.createGain();
-    master.gain.value = 0.028;
-    master.connect(state.audio.destination);
-
-    [220, 277.18, 329.63].forEach((freq, index) => {
-      const osc = state.audio.createOscillator();
-      const gain = state.audio.createGain();
-      const now = state.audio.currentTime;
-      osc.type = index === 1 ? "triangle" : "sine";
-      osc.frequency.value = freq;
-      gain.gain.setValueAtTime(0.0001, now);
-      gain.gain.linearRampToValueAtTime(0.24, now + 1.4 + index * 0.2);
-      gain.gain.linearRampToValueAtTime(0.15, now + 6 + index * 0.4);
-      osc.connect(gain);
-      gain.connect(master);
-      osc.start(now);
-    });
-  }
-
-  function playSfx(type) {
-    if (!state.audio || state.audio.state !== "running") {
-      return;
-    }
-    const oscillator = state.audio.createOscillator();
-    const gain = state.audio.createGain();
-    const now = state.audio.currentTime;
-    const notes = {
-      build: [620, 330],
-      coin: [780, 1040],
-      queue: [340, 420],
-      clean: [510, 610],
-      repair: [220, 360],
-      error: [180, 120],
-    };
-    const [start, end] = notes[type] || [400, 520];
-    oscillator.type = type === "error" ? "sawtooth" : "triangle";
-    oscillator.frequency.setValueAtTime(start, now);
-    oscillator.frequency.exponentialRampToValueAtTime(end, now + 0.18);
-    gain.gain.setValueAtTime(0.001, now);
-    gain.gain.exponentialRampToValueAtTime(0.06, now + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
-    oscillator.connect(gain);
-    gain.connect(state.audio.destination);
-    oscillator.start(now);
-    oscillator.stop(now + 0.25);
-  }
-
-  function weatherLabel(value) {
-    return {
-      Sunny: "맑음",
-      Cloudy: "흐림",
-      Rainy: "비",
-      Windy: "바람",
-    }[value];
-  }
-
-  function money(value) {
-    return `$${Math.round(value).toLocaleString()}`;
-  }
-
-  function insideMap(x, y) {
-    return x >= 0 && y >= 0 && x < MAP_W && y < MAP_H;
-  }
-
-  function clamp(value, min, max) {
-    return Math.min(max, Math.max(min, value));
-  }
-
-  function mixColors(a, b, amount) {
-    const colorA = hexToRgb(a);
-    const colorB = hexToRgb(b);
-    const mix = {
-      r: Math.round(colorA.r + (colorB.r - colorA.r) * amount),
-      g: Math.round(colorA.g + (colorB.g - colorA.g) * amount),
-      b: Math.round(colorA.b + (colorB.b - colorA.b) * amount),
-    };
-    return `rgb(${mix.r}, ${mix.g}, ${mix.b})`;
-  }
-
-  function hexToRgb(hex) {
-    const clean = hex.replace("#", "");
-    const n = Number.parseInt(clean, 16);
-    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
-  }
+  note(state, "Init", "Workforce model loaded.");
+  note(state, "Forecast", `Blossom forecast: ${md(addDays(START, state.blossom.forecast))}.`);
+  note(state, "Economy", "Operating cash seeded at $200,000,000.");
+  syncDerived(state); ensure(state); bind(state); refresh(state); requestAnimationFrame((time) => loop(state, time));
 }
+
+function bind(state) {
+  state.refs.root.addEventListener("click", (event) => {
+    const action = event.target.closest("[data-action]")?.dataset.action, filter = event.target.closest("[data-filter]")?.dataset.filter, select = event.target.closest("[data-select-employee]")?.dataset.selectEmployee, remove = event.target.closest("[data-remove-assignment]"), eventAction = event.target.closest("[data-event-action]");
+    if (action) return handleAction(state, action);
+    if (filter) { state.filter = filter; state.refs.root.querySelectorAll("[data-filter]").forEach((node) => node.classList.toggle("is-active", node.dataset.filter === filter)); return dirty(state); }
+    if (select) { state.selected = select; return dirty(state); }
+    if (remove) return unassign(state, remove.dataset.slotId, remove.dataset.removeAssignment);
+    if (eventAction) return handleEventAction(state, eventAction.dataset.eventAction, eventAction.dataset.value || null);
+  });
+  state.refs.roster.addEventListener("dragstart", (event) => { const id = event.target.closest("[data-employee-id]")?.dataset.employeeId; if (!id) return; state.drag = id; event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("text/plain", id); });
+  state.refs.roster.addEventListener("dragend", () => { state.drag = null; clearDrop(state); });
+  state.refs.board.addEventListener("dragover", (event) => { const slot = event.target.closest("[data-slot-id]"); if (!slot) return; event.preventDefault(); clearDrop(state); slot.classList.add("is-drop-target"); });
+  state.refs.board.addEventListener("dragleave", (event) => event.target.closest("[data-slot-id]")?.classList.remove("is-drop-target"));
+  state.refs.board.addEventListener("drop", (event) => { const slot = event.target.closest("[data-slot-id]"), id = event.dataTransfer.getData("text/plain") || state.drag; if (!slot || !id) return; event.preventDefault(); clearDrop(state); assign(state, slot.dataset.slotId, id); });
+}
+
+function handleAction(state, action) {
+  if (action === "toggle-run") state.running = !state.running;
+  if (action === "advance-12h") advance(state, 1);
+  if (action === "advance-day") advance(state, 2);
+  if (action === "focus-core") { state.focus = "core"; note(state, "Scene", "Camera moved to process core."); }
+  if (action === "focus-blossom") { state.focus = "blossom"; note(state, "Scene", "Camera moved to blossom walkway."); }
+  if (action === "undo") undo(state);
+  if (action === "redo") redo(state);
+  if (action === "open-audio") toggleAudio(state, (tag, text) => note(state, tag, text));
+  if (action === "auto-mentor") mentor(state);
+  if (action === "run-training") training(state);
+  if (action === "run-handover") handover(state);
+  if (action === "emergency-recruit") recruit(state);
+  dirty(state);
+}
+
+function handleEventAction(state, action, value) {
+  if (action === "date-minus") state.blossom.open = clamp(state.blossom.open - 1, 4, 14);
+  if (action === "date-plus") state.blossom.open = clamp(state.blossom.open + 1, 4, 14);
+  if (action === "duration-toggle") state.blossom.duration = state.blossom.duration === 6 ? 7 : 6;
+  if (action === "family-toggle") state.blossom.perks = !state.blossom.perks;
+  if (action === "media") state.blossom.media = value;
+  rebuild(state);
+  note(state, "Event", `Blossom setup updated: ${md(addDays(START, state.blossom.open))}, ${state.blossom.duration} days, ${MEDIA[state.blossom.media].label}.`);
+  dirty(state);
+}
+
+function advance(state, count) { for (let step = 0; step < count; step += 1) { ensure(state); simulate(state, resolve(state, state.current)); state.current += 1; prune(state); ensure(state); if (state.current >= state.nextEvt) { randomEvent(state); state.nextEvt = state.current + randInt(3, 5); } } syncDerived(state); dirty(state); }
+function refresh(state) { const view = buildView(state), helpers = uiHelpers(state); renderUi(state, view, buildConflicts(state, view, (employee, info, slot) => available(state, employee, info, slot)), helpers); const zoneHeat = helpers.zoneHeat(); drawScene(state, helpers.periodInfo(state.current), helpers.weatherKey(helpers.dayNow()), zoneHeat, helpers.bloom()); drawMinimap(state, zoneHeat); state.dirty = false; }
+function loop(state, time) { const delta = Math.min(0.05, (time - state.last) / 1000); state.last = time; state.frame += delta; state.target = state.focus === "blossom" ? { x: 130, y: -30 } : { x: -60, y: 20 }; state.pan.x = lerp(state.pan.x, state.target.x, delta * 2.2); state.pan.y = lerp(state.pan.y, state.target.y, delta * 2.2); if (state.running) { state.runAcc += delta; if (state.runAcc >= 1.25) { state.runAcc -= 1.25; advance(state, 1); } } const helpers = uiHelpers(state); const zoneHeat = helpers.zoneHeat(); drawScene(state, helpers.periodInfo(state.current), helpers.weatherKey(helpers.dayNow()), zoneHeat, helpers.bloom()); drawMinimap(state, zoneHeat); if (state.dirty) refresh(state); requestAnimationFrame((next) => loop(state, next)); }
+function uiHelpers(state) { return { dayNow: () => Math.floor(state.current / 2), eventDay: (day) => day >= state.blossom.open && day < state.blossom.open + state.blossom.duration, weatherKey: (day) => weatherKey(state, day), crewShift: (crew, day) => PATTERN[(day + OFFSETS[crew]) % PATTERN.length], currentSlots: () => resolve(state, state.current).slots, filteredEmployees: () => state.employees.filter((employee) => employee.active && (state.filter === "all" || employee.workType === state.filter)).sort((a, b) => (a.workType === b.workType ? b.fatigue - a.fatigue : a.workType.localeCompare(b.workType))), periodInfo, zoneHeat: () => zoneHeat(state), bloom: () => clamp(1 - Math.abs(Math.floor(state.current / 2) - state.blossom.forecast) / 10, 0.18, 0.95) }; }
+
+function buildView(state) { return Array.from({ length: HORIZON }, (_, index) => resolve(state, state.current + index)); }
+function periodInfo(index) { const date = new Date(START.getTime() + index * PERIOD_MS); return { index, dayIndex: Math.floor(index / 2), date, shift: index % 2 === 0 ? "day" : "night", label: `${md(date)} ${index % 2 === 0 ? "day" : "night"}` }; }
+function ensure(state) { for (let periodIndex = state.horizon + 1; periodIndex < state.current + HORIZON; periodIndex += 1) buildPeriod(state, periodIndex); state.horizon = Math.max(state.horizon, state.current + HORIZON - 1); }
+function buildPeriod(state, periodIndex) { const info = periodInfo(periodIndex); state.byPeriod[periodIndex] = TEMPLATES.filter((template) => template.shifts.includes(info.shift) && (!template.eventOnly || eventDay(state, info.dayIndex))).map((template) => (state.slots[`${periodIndex}:${template.id}`] = { ...template, id: `${periodIndex}:${template.id}`, periodIndex, manual: null }).id); }
+function rebuild(state) { const manual = new Map(); Object.values(state.slots).forEach((slot) => slot.periodIndex >= state.current && slot.manual !== null && manual.set(slot.id, [...slot.manual])); Object.keys(state.slots).forEach((id) => state.slots[id].periodIndex >= state.current && delete state.slots[id]); Object.keys(state.byPeriod).forEach((key) => Number(key) >= state.current && delete state.byPeriod[key]); state.horizon = state.current - 1; ensure(state); manual.forEach((value, id) => state.slots[id] && (state.slots[id].manual = value)); }
+function prune(state) { Object.keys(state.byPeriod).forEach((key) => { if (Number(key) < state.current - 2) { state.byPeriod[key].forEach((id) => delete state.slots[id]); delete state.byPeriod[key]; } }); }
+
+function resolve(state, periodIndex) { const info = periodInfo(periodIndex), defs = (state.byPeriod[periodIndex] || []).map((id) => state.slots[id]).filter(Boolean), locked = new Set(), used = new Set(), slots = []; defs.filter((slot) => slot.manual !== null).forEach((slot) => { const employeeIds = slot.manual.filter((id) => state.map.get(id)?.active); employeeIds.forEach((id) => locked.add(id)); slots.push(makeView(state, slot, info, employeeIds, true)); }); defs.filter((slot) => slot.manual === null).sort((a, b) => b.w - a.w).forEach((slot) => { const employeeIds = []; [true, false].forEach((strict) => candidates(state, slot, info, strict).forEach((employee) => { if (employeeIds.length >= slot.need || locked.has(employee.id) || used.has(employee.id) || employeeIds.includes(employee.id)) return; employeeIds.push(employee.id); used.add(employee.id); })); slots.push(makeView(state, slot, info, employeeIds, false)); }); return { info, slots: slots.sort((a, b) => b.w - a.w) }; }
+function candidates(state, slot, info, strict) { return state.employees.filter((employee) => employee.active && slot.types.includes(employee.workType) && (!strict ? !(employee.workType === "day" && info.shift === "night") : available(state, employee, info, slot))).sort((a, b) => fit(state, b, slot, info, strict) - fit(state, a, slot, info, strict)); }
+function available(state, employee, info, slot) { if (!slot.types.includes(employee.workType)) return false; if (employee.workType === "shift") return PATTERN[(info.dayIndex + OFFSETS[employee.crew]) % PATTERN.length] === info.shift; const weekday = addDays(START, info.dayIndex).getDay(); return info.shift === "day" && (weekday >= 1 && weekday <= 5 || slot.zone === "blossom" || slot.zone === "hq"); }
+function fit(state, employee, slot, info, strict) { return avg(slot.keys.map((key) => employee.skills[key] || 18)) + employee.successionReadiness * 0.2 + employee.morale * 0.18 + employee.safety * 0.22 + (employee.primary === slot.zone ? 15 : employee.secondary.includes(slot.zone) ? 8 : 0) + (employee.mentorId ? 6 : 0) + (available(state, employee, info, slot) ? 16 : strict ? -80 : -18) - employee.fatigue * 0.5; }
+function makeView(state, slot, info, employeeIds, manual) { const employees = employeeIds.map((id) => state.map.get(id)).filter(Boolean), coverage = clamp(employeeIds.length / slot.need, 0, 1), skill = employees.length ? avg(employees.map((employee) => avg(slot.keys.map((key) => employee.skills[key] || 18)))) / 100 : 0, safety = employees.length ? avg(employees.map((employee) => employee.safety)) / 100 : 0, fatigue = employees.length ? avg(employees.map((employee) => employee.fatigue)) / 100 : 0, senior = employees.some((employee) => employee.experienceYears >= 15); return { ...slot, employeeIds, people: employees, cov: coverage, q: clamp(coverage * 0.5 + skill * 0.28 + safety * 0.18 + (senior ? 0.06 : 0) - fatigue * 0.16, 0, 1), senior, off: employees.some((employee) => !available(state, employee, info, slot)), manual }; }
+
+function simulate(state, resolved) {
+  const prod = resolved.slots.filter((slot) => ["control", "cracker", "olefins", "aromatics", "utilities", "tankFarm"].includes(slot.zone)), support = resolved.slots.filter((slot) => !prod.includes(slot)), eventSlot = resolved.slots.find((slot) => slot.zone === "blossom"), duplicateCount = countDuplicates(resolved.slots), mismatchCount = countMismatches(resolved.slots, resolved.info), offCount = resolved.slots.reduce((sum, slot) => sum + (slot.off ? 1 : 0), 0), avgFatigue = avg(uniq(resolved.slots.flatMap((slot) => slot.employeeIds)).map((id) => state.map.get(id)?.fatigue || 0)), weather = WEATHER[weatherKey(state, resolved.info.dayIndex)], eventActive = eventDay(state, resolved.info.dayIndex) && resolved.info.shift === "day", eventScore = eventSlot ? clamp(eventSlot.q * 0.75 + avg(support.map((slot) => slot.q)) * 0.25, 0, 1) : 0, safetyDesk = resolved.slots.find((slot) => slot.id.includes("safetyDesk")), safetyBase = clamp((safetyDesk?.q || 0.68) * 0.45 + (1 - avgFatigue / 100) * 0.2 + (1 - state.mods.reg * 0.6) * 0.15 + (1 - mismatchCount * 0.05) * 0.2, 0, 1), incident = Math.random() < clamp(0.04 + (1 - safetyBase) * 0.26 + mismatchCount * 0.05 + duplicateCount * 0.05 + offCount * 0.03 + (eventActive ? (1 - eventScore) * 0.12 : 0), 0.02, 0.72), uptime = clamp(weighted(prod) * 0.78 + avg(support.map((slot) => slot.q)) * 0.1 + weather.prod * 0.12 - duplicateCount * 0.02 - mismatchCount * 0.03, 0.38, 1), revenue = 2_850_000 * state.mods.market * uptime * weather.prod, salary = state.employees.filter((employee) => employee.active).reduce((sum, employee) => sum + pay(employee), 0), overtime = offCount * 42_000 + duplicateCount * 18_000, welfare = eventActive && state.blossom.perks ? 78_000 : 0, eventCost = eventActive ? 220_000 * MEDIA[state.blossom.media].crowd : 0, trainingCost = (state.progs.training ? 55_000 : 0) + (state.progs.handover ? 32_000 : 0), total = salary + overtime + welfare + eventCost + trainingCost;
+  state.fin.revenue += revenue; state.fin.salary += salary; state.fin.overtime += overtime; state.fin.training += trainingCost; state.fin.welfare += welfare; state.fin.event += eventCost; state.stats.cash += revenue - total; state.fin.last = { net: revenue - total, revenue, salary, overtime, training: trainingCost, welfare, event: eventCost };
+  state.stats.uptime = lerp(state.stats.uptime, uptime * 100, 0.34); state.stats.fatigue = lerp(state.stats.fatigue, avgFatigue, 0.28); state.stats.harmony = clamp(lerp(state.stats.harmony, 76 - offCount * 3.2 - state.mods.labor * 22 + (eventActive && state.blossom.perks ? 4 : 0), 0.2), 18, 100); state.stats.community = clamp(lerp(state.stats.community, 68 + (eventActive ? eventScore * 22 : 0) + MEDIA[state.blossom.media].rep * 10 - (incident ? 10 : 0), 0.24), 12, 100); state.stats.trir = clamp(lerp(state.stats.trir, Math.max(0.16, state.stats.trir + (incident ? 0.18 : -0.02) + (1 - uptime) * 0.08), 0.34), 0.14, 2.5);
+  const assigned = new Map(); resolved.slots.forEach((slot) => slot.employeeIds.forEach((id) => assigned.set(id, slot))); state.employees.forEach((employee) => updateEmployee(state, employee, resolved.info, assigned.get(employee.id), incident, eventActive)); scoreEvent(state, resolved.info.dayIndex, eventActive ? eventScore : null); if (resolved.info.shift === "day" && Math.random() < 0.015 + state.mods.labor * 0.02 + (resolved.info.dayIndex > 8 ? 0.012 : 0)) retire(state); decay(state); note(state, incident ? "Safety" : eventActive && eventScore >= 0.75 ? "Community" : "Ops", incident ? `Incident risk materialized during ${resolved.info.label}.` : eventActive && eventScore >= 0.75 ? `Blossom day landed at ${Math.round(eventScore * 100)} quality.` : `${resolved.info.label}: uptime ${Math.round(uptime * 100)}% / net ${money(state.fin.last.net)}.`); }
+function updateEmployee(state, employee, info, slot, incident, eventActive) { if (!employee.active) return; const mentor = employee.mentorId ? state.map.get(employee.mentorId) : null; if (slot) { const offPattern = !available(state, employee, info, slot); employee.fatigue = clamp(employee.fatigue + 7 + (offPattern ? 5 : 0) + employee.commutePressure * 0.03, 0, 100); employee.morale = clamp(employee.morale + (eventActive && slot.zone === "blossom" ? 2.8 : 0.5) - (offPattern ? 3.6 : 0) - (employee.fatigue > 70 ? 2.2 : 0), 0, 100); employee.recent = [...employee.recent, info.index].slice(-16); if (state.progs.training && ["training", "hq", "blossom"].includes(slot.zone)) { employee.successionReadiness = clamp(employee.successionReadiness + 1.8, 0, 100); employee.safety = clamp(employee.safety + 0.8, 0, 100); } if (state.progs.handover && (mentor || employee.menteeIds.length)) employee.successionReadiness = clamp(employee.successionReadiness + 1.2, 0, 100); } else { employee.fatigue = clamp(employee.fatigue - 6.2, 0, 100); employee.morale = clamp(employee.morale + 0.9, 0, 100); } if (incident && slot) { employee.morale = clamp(employee.morale - 2.8, 0, 100); employee.fatigue = clamp(employee.fatigue + 1.6, 0, 100); } }
+function assign(state, slotId, employeeId) { const slot = state.slots[slotId], resolved = resolve(state, slot.periodIndex), current = slot.manual !== null ? [...slot.manual] : [...(resolved.slots.find((entry) => entry.id === slotId)?.employeeIds || [])]; if (!slot || !state.map.get(employeeId)?.active || current.includes(employeeId)) return; const before = slot.manual === null ? null : [...slot.manual], after = [...current, employeeId]; slot.manual = after; state.history.push({ slotId, before, after }); state.future = []; note(state, "Schedule", `Assigned ${state.map.get(employeeId).name} to ${slot.label}.`); playSfx(state, "assign"); dirty(state); }
+function unassign(state, slotId, employeeId) { const slot = state.slots[slotId], resolved = resolve(state, slot.periodIndex), current = slot.manual !== null ? [...slot.manual] : [...(resolved.slots.find((entry) => entry.id === slotId)?.employeeIds || [])]; if (!slot || !current.includes(employeeId)) return; const before = slot.manual === null ? null : [...slot.manual], after = current.filter((id) => id !== employeeId); slot.manual = after; state.history.push({ slotId, before, after }); state.future = []; note(state, "Schedule", `Removed ${state.map.get(employeeId)?.name || "employee"} from ${slot.label}.`); playSfx(state, "soft"); dirty(state); }
+function undo(state) { const entry = state.history.pop(); if (!entry || !state.slots[entry.slotId]) return; state.slots[entry.slotId].manual = entry.before === null ? null : [...entry.before]; state.future.push(entry); note(state, "Schedule", `Undo restored ${state.slots[entry.slotId].label}.`); playSfx(state, "soft"); dirty(state); }
+function redo(state) { const entry = state.future.pop(); if (!entry || !state.slots[entry.slotId]) return; state.slots[entry.slotId].manual = entry.after === null ? null : [...entry.after]; state.history.push(entry); note(state, "Schedule", `Redo re-applied ${state.slots[entry.slotId].label}.`); playSfx(state, "soft"); dirty(state); }
+function mentor(state) { let pairs = 0; state.employees.filter((employee) => employee.active && employee.trainee && !employee.mentorId).forEach((trainee) => { const mentor = state.employees.filter((employee) => employee.active && !employee.trainee && employee.experienceYears >= 15 && (employee.primary === trainee.primary || employee.secondary.includes(trainee.primary))).sort((a, b) => Math.abs((a.skills[trainee.primary] || 0) - (trainee.skills[trainee.primary] || 0)) - Math.abs((b.skills[trainee.primary] || 0) - (trainee.skills[trainee.primary] || 0)))[0]; if (mentor) { trainee.mentorId = mentor.id; mentor.menteeIds = uniq([...mentor.menteeIds, trainee.id]); pairs += 1; } }); note(state, "Talent", pairs ? `Auto mentor paired ${pairs} trainee${pairs === 1 ? "" : "s"}.` : "Auto mentor found no unpaired trainee."); playSfx(state, "mentor"); syncDerived(state); }
+function training(state) { if (state.stats.cash < 280_000) return note(state, "Finance", "Training program blocked by cash constraints."); state.stats.cash -= 280_000; state.fin.training += 280_000; state.progs.training = Math.max(state.progs.training, 4); note(state, "Talent", "Focused training activated for the next 4 half-shifts."); playSfx(state, "mentor"); }
+function handover(state) { if (state.stats.cash < 180_000) return note(state, "Finance", "Knowledge transfer blocked by cash constraints."); state.stats.cash -= 180_000; state.fin.training += 180_000; state.progs.handover = Math.max(state.progs.handover, 4); note(state, "Talent", "Handover sprint started for high-risk roles."); playSfx(state, "mentor"); }
+function recruit(state) { const candidate = state.pool.shift(); if (!candidate) return note(state, "Talent", "Talent pool is empty."); const cost = 720_000 + state.mods.recruit * 180_000; if (state.stats.cash < cost) { state.pool.unshift(candidate); return note(state, "Finance", "Emergency hire blocked by cash constraints."); } if (candidate.workType === "shift") candidate.crew = ["A", "B", "C", "D"].sort((a, b) => crewCount(state, a) - crewCount(state, b))[0]; candidate.hired = true; state.stats.cash -= cost; state.fin.recruit += cost; state.employees.push(candidate); state.map.set(candidate.id, candidate); if (!state.selected) state.selected = candidate.id; note(state, "Talent", `Emergency hire onboarded ${candidate.name} (${candidate.role}).`); playSfx(state, "assign"); syncDerived(state); }
+function randomEvent(state) { choice([() => { const delta = Math.random() > 0.5 ? 0.12 : -0.12; state.mods.market = clamp(state.mods.market + delta, 0.78, 1.25); note(state, "Market", `Oil price ${delta > 0 ? "spiked" : "softened"}. Revenue is now ${state.mods.market.toFixed(2)}x.`); }, () => { state.mods.reg = clamp(state.mods.reg + 0.1, 0, 0.55); note(state, "HSE", "New regulatory checklist raised compliance pressure."); }, () => { state.mods.labor = clamp(state.mods.labor + 0.12, 0, 0.6); state.stats.harmony = clamp(state.stats.harmony - 4, 0, 100); note(state, "Labor", "Union demand spike increased welfare expectations."); }, () => { state.mods.recruit = clamp(state.mods.recruit + 0.15, 0, 0.7); note(state, "Talent", "Hiring competition accelerated near the site."); }, () => { state.mods.bloomBias = clamp(state.mods.bloomBias + (Math.random() > 0.5 ? 0.18 : -0.16), -0.4, 0.4); note(state, "Weather", "Blossom weather outlook shifted."); }, () => { state.employees.filter((employee) => employee.active && employee.experienceYears >= 18).slice(0, 3).forEach((employee) => { employee.retirementRisk = clamp(employee.retirementRisk + 0.08, 0, 1); }); note(state, "Talent", "Retirement wave warning hit senior operations roles."); }])(); playSfx(state, "alarm"); }
+function retire(state) { const employee = state.employees.filter((item) => item.active && item.retirementRisk >= 0.82).sort((a, b) => b.retirementRisk - a.retirementRisk)[0]; if (!employee) return; employee.active = false; note(state, "Talent", `${employee.name} entered retirement leave. Backfill pressure increased.`); playSfx(state, "alarm"); }
+function scoreEvent(state, dayIndex, score) { if (score !== null) { state.blossom.scores = state.blossom.scores.filter((item) => item.day !== dayIndex); state.blossom.scores.push({ day: dayIndex, score }); } const end = state.blossom.open + state.blossom.duration; if (!state.blossom.done && dayIndex > end) { const avgScore = avg(state.blossom.scores.map((item) => item.score)); if (avgScore >= 0.72) { state.stats.community = clamp(state.stats.community + 7, 0, 100); state.stats.harmony = clamp(state.stats.harmony + 4, 0, 100); state.stats.cash += 1_250_000; note(state, "Community", "Blossom event closed above plan. Reputation and sponsorship improved."); } else { state.stats.community = clamp(state.stats.community - 6, 0, 100); state.stats.trir = clamp(state.stats.trir + 0.08, 0, 2.5); note(state, "Community", "Blossom event closed with complaints and added safety scrutiny."); } state.blossom.done = true; } }
+function syncDerived(state) { state.stats.fatigue = avg(state.employees.filter((employee) => employee.active).map((employee) => employee.fatigue)); state.stats.succession = avg(["control", "cracker", "olefins", "aromatics", "utilities", "tankFarm", "safetyDesk", "hq"].map((key) => clamp(state.employees.filter((employee) => employee.active && (employee.skills[key] || 0) >= 68 && employee.successionReadiness >= 62 && employee.retirementRisk < 0.9).length / 2, 0, 1))) * 100; state.alerts = buildAlerts(state); }
+function buildAlerts(state) { const current = resolve(state, state.current), out = []; current.slots.forEach((slot) => slot.crit && slot.cov < 1 && out.push({ t: "critical", text: `${slot.label} is underfilled for the active period.` })); if (state.stats.trir >= 0.95) out.push({ t: "critical", text: `TRIR has climbed to ${state.stats.trir.toFixed(2)}.` }); if (state.stats.harmony <= 63) out.push({ t: "warn", text: `Labor harmony is slipping (${Math.round(state.stats.harmony)}).` }); if (state.stats.succession <= 62) out.push({ t: "warn", text: `Critical succession coverage is only ${Math.round(state.stats.succession)}%.` }); if (state.stats.cash <= 170_000_000) out.push({ t: "warn", text: "Cash has fallen below the comfort band." }); const d = state.blossom.open - Math.floor(state.current / 2); if (d >= 0 && d <= 2) out.push({ t: "critical", text: `Blossom opening begins in ${d} day${d === 1 ? "" : "s"}.` }); return out.slice(0, 4); }
+function weatherKey(state, dayIndex) { const key = `d${dayIndex}`; if (!state.weather[key]) { const roll = Math.random(), bias = state.mods.bloomBias; state.weather[key] = roll < 0.44 + bias * 0.08 ? "clear" : roll < 0.68 + bias * 0.04 ? "haze" : roll < 0.88 - bias * 0.06 ? "windy" : "rain"; } return state.weather[key]; }
+function zoneHeat(state) { const current = resolve(state, state.current), out = {}; current.slots.forEach((slot) => { out[slot.zone] = slot.q; }); out.union = clamp(state.stats.harmony / 100, 0, 1); out.training = clamp(state.stats.succession / 100 + (state.progs.training ? 0.12 : 0), 0, 1); out.blossom = eventDay(state, Math.floor(state.current / 2)) ? clamp(state.stats.community / 100, 0, 1) : 0.55; return out; }
+function eventDay(state, dayIndex) { return dayIndex >= state.blossom.open && dayIndex < state.blossom.open + state.blossom.duration; }
+function note(state, tag, text) { state.logs.unshift({ tag, text, time: stamp(new Date(START.getTime() + state.current * PERIOD_MS)) }); state.logs = state.logs.slice(0, 24); }
+function dirty(state) { state.dirty = true; }
+function clearDrop(state) { state.refs.board.querySelectorAll(".is-drop-target").forEach((node) => node.classList.remove("is-drop-target")); }
+function pay(employee) { return employee.workType === "shift" ? 8600 + employee.experienceYears * 160 : 7900 + employee.experienceYears * 140; }
+function crewCount(state, crew) { return state.employees.filter((employee) => employee.active && employee.crew === crew).length; }
+function weighted(slots) { const weight = slots.reduce((sum, slot) => sum + slot.w, 0); return weight ? slots.reduce((sum, slot) => sum + slot.q * slot.w, 0) / weight : 0; }
+function countDuplicates(slots) { const counts = new Map(); slots.forEach((slot) => slot.employeeIds.forEach((id) => counts.set(id, (counts.get(id) || 0) + 1))); return [...counts.values()].filter((value) => value > 1).length; }
+function countMismatches(slots, info) { let total = 0; slots.forEach((slot) => slot.people.forEach((employee) => { if (!slot.types.includes(employee.workType) || (employee.workType === "day" && info.shift === "night")) total += 1; })); return total; }
+function decay(state) { state.progs.training = Math.max(0, state.progs.training - 1); state.progs.handover = Math.max(0, state.progs.handover - 1); state.mods.reg = lerp(state.mods.reg, 0.16, 0.06); state.mods.labor = lerp(state.mods.labor, 0.12, 0.05); state.mods.recruit = lerp(state.mods.recruit, 0.08, 0.05); state.mods.market = lerp(state.mods.market, 1, 0.05); state.mods.bloomBias = lerp(state.mods.bloomBias, 0, 0.04); }

@@ -2,46 +2,70 @@
 
 ## Current Status
 
-- Date: 2026-03-19
-- Phase: Checkpoint commit before simulation core implementation
-- Project state: New shell, layout, typography, and dashboard structure are in place; game logic replacement is still pending
+- Date: 2026-03-20
+- Phase: Playable workforce simulation core implemented
+- Project state: The dashboard shell, workforce model, staffing board, isometric plant renderer, talent tools, blossom event controls, KPI loop, and verification pass are now in place
 
-## Completed So Far
+## Completed In This Pass
 
-- Read the workspace structure and confirmed it is a small static JS app.
-- Confirmed there is no in-scope `AGENTS.md` file inside this project path or its parent chain.
-- Reviewed the existing implementation enough to determine it should be replaced rather than incrementally modified.
-- Expanded the compressed user prompt into a concrete architecture for:
-  - isometric plant rendering
-  - workforce planning UI
-  - 4조2교대 / 일근 staffing logic
-  - succession and training systems
-  - 벚꽃동산 event management
-  - economy, safety, KPI, and random event simulation
-- Created `plan.md` with the working implementation checklist.
-- Replaced `index.html` with the new SKIncheonWonchang-Isometric document shell.
-- Replaced `src/main.js` with the new dashboard / control surface layout.
-- Replaced `src/style.css` with the new industrial UI system.
-- Added `.gitignore` so `node_modules` and `.omx` are excluded from the repository.
+- Replaced the broken placeholder `src/parkTycoon.js` logic with a new simulation core built around:
+  - 4-crew / 2-shift rotation planning
+  - day-worker office scheduling
+  - drag-and-drop future staffing overrides
+  - undo / redo for manual schedule changes
+  - conflict detection for duplicate bookings, rest risk, overtime, mismatch, and handover gaps
+- Added a modular implementation split across:
+  - `src/gameData.js`
+  - `src/gameUtils.js`
+  - `src/gameAudio.js`
+  - `src/gameCanvas.js`
+  - `src/gameUi.js`
+  - `src/parkTycoon.js`
+- Cleaned `src/main.js` so the dashboard text and DOM targets are stable and readable.
+- Preserved and wired the requested feature pillars into the playable loop:
+  - staffing quality affects uptime, fatigue, harmony, TRIR, community, and cash
+  - succession coverage is computed from critical skill depth
+  - training, handover, mentoring, and emergency recruitment materially change outcomes
+  - cherry blossom opening date, duration, family perks, and PR mode change event quality and community result
+  - random market / HSE / labor / weather / retirement events perturb the simulation
+- Added a new isometric plant scene and minimap heat visualization for major areas:
+  - HQ
+  - union office
+  - training center
+  - control core
+  - cracker
+  - olefins
+  - aromatics
+  - utilities
+  - tank farm
+  - blossom walkway
+- Added lightweight Web Audio support for ambient bed and action cues.
+- Updated `src/style.css` with the small additional states needed by the new roster / overlay / slot UI.
 
-## In Progress
+## Verification
 
-- Preparing the full rewrite of `src/parkTycoon.js` to match the new UI contract.
+- `npm run check` passed.
+- Additional module checks passed:
+  - `node --check src/gameUtils.js`
+  - `node --check src/gameData.js`
+  - `node --check src/gameAudio.js`
+  - `node --check src/gameCanvas.js`
+  - `node --check src/gameUi.js`
+- Module import smoke test passed:
+  - `node --input-type=module -e "import('./src/parkTycoon.js')"`
+- Local server smoke verification passed:
+  - started `node server.js`
+  - fetched `http://127.0.0.1:4173/`
+  - received `200`
+  - confirmed page content includes `SKIncheonWonchang-Isometric`
 
-## Next Actions
+## Remaining Gaps
 
-1. Rebuild the game logic module from scratch.
-2. Wire drag-and-drop staffing, KPI math, and timeline simulation.
-3. Add isometric rendering, minimap heatmap, and audio.
-4. Run syntax verification and fix any issues.
-5. Update this file with implementation and verification results.
-
-## Handoff Notes
-
-- The existing codebase is not a git repository, so there is no commit history or branch context to rely on.
-- Current `package.json` only provides a simple local server and syntax-check script; no framework or build tooling exists.
-- Because the product scope is broad, the implementation should prioritize a strong playable core over edge-case completeness:
-  - schedule manipulation must be solid
-  - KPI feedback must be legible
-  - the event/succession systems must materially affect outcomes
-- If work is interrupted during implementation, resume from `src/parkTycoon.js`; the shell and style contract are already replaced and should now be treated as the UI baseline.
+- The project now has a strong playable core, but some scope items are still simplified rather than deeply simulated:
+  - production economics are coarse-grained, not plant-unit accurate
+  - event visitor flow is modeled through KPI and staffing quality rather than per-visitor crowd agents
+  - retirement and training systems are operational, but still lightweight compared with a full management sim
+- If another pass is needed, the highest-value next upgrades are:
+  1. richer per-role slot requirements and coverage scoring
+  2. deeper long-range calendar planning beyond the current visible horizon
+  3. more detailed incident / labor event branches and post-event consequences

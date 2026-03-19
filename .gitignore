@@ -1,0 +1,4 @@
+node_modules/
+.omx/
+*.log
+npm-debug.log*

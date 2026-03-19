@@ -1,0 +1,11 @@
+{
+  "name": "parktycoon-isometric",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js",
+    "check": "node --check server.js && node --check src/main.js && node --check src/parkTycoon.js"
+  }
+}
